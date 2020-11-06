@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 PREFIX_FREE_DISTRIBUTIONS = [
     "certbot",
     "certbot-apache",
+    "certbot-discovery",
     "certbot-dns-cloudflare",
     "certbot-dns-cloudxns",
     "certbot-dns-digitalocean",
