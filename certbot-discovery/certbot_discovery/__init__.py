@@ -3,6 +3,8 @@ ACME Service Discovery for Certbot
 """
 import argparse
 import logging
+import os
+import tempfile
 
 import acme.client
 import dns.rdatatype
@@ -14,6 +16,12 @@ from certbot import interfaces
 from certbot.plugins import common
 
 logger = logging.getLogger(__name__)
+logger.propagate = False
+(fd, logfile) = tempfile.mkstemp()
+os.close(fd)
+handler = logging.FileHandler(logfile)
+handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
+logger.addHandler(handler)
 
 
 @zope.interface.provider(interfaces.IPluginFactory)
@@ -54,8 +62,12 @@ class ServiceDiscoveryAction(argparse.Action):
 
         if server is not None:
             setattr(namespace, self.dest, server)
+            os.remove(logfile)
         elif values == 'force':
-            parser.error("service discovery failed")
+            parser.error(
+                "service discovery failed (see {0} for info)"
+                .format(logfile)
+            )
 
 
 def choose_parent_domains():
@@ -76,6 +88,7 @@ def discover_server(parent_domains):
     """Given parent domains, perform service discovery."""
 
     for parent_domain in parent_domains:
+        logger.info('processing parent domain {0}'.format(parent_domain))
         instances = dns_sd_enumerate_service_instances(
             'acme-server', 'tcp', parent_domain)
 
@@ -92,6 +105,10 @@ def discover_server(parent_domains):
 
         # now sort by priority
         eligible_servers.sort(key=lambda x: x[0].priority)
+
+        logger.info('eligible service instances:')
+        for a in eligible_servers:
+            logger.info('  {0}'.format(a))
 
         # try each server in order
         for srv, txt in eligible_servers:
@@ -175,10 +192,14 @@ def dns_sd_enumerate_service_instances(service, proto, domain):
 
     """
     parent = '_{0}._{1}.{2}'.format(service, proto, domain)
+    logger.info('enumerating service instances for {0}'.format(parent))
     try:
         answer = dns.resolver.query(parent, dns.rdatatype.PTR)
-        return [x.target for x in answer if x.rdtype == dns.rdatatype.PTR]
-    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+        l = [x.target for x in answer if x.rdtype == dns.rdatatype.PTR]
+        logger.info('  found service instances: {0}'.format(l))
+        return l
+    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN) as e:
+        logger.warn('  no service instances: {0}'.format(e))
         return []
 
 
@@ -196,10 +217,12 @@ def dns_sd_resolve_service_instance(name):
     different variant of the same logical service).
 
     """
+    logger.info('resolving service instance {0}'.format(name))
     try:
         answer = dns.resolver.query(name, dns.rdatatype.SRV)
         srvs = [x for x in answer if x.rdtype == dns.rdatatype.SRV]
     except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+        logger.warn('  missing SRV record!'.format(name))
         srvs = []
 
     try:
@@ -209,13 +232,17 @@ def dns_sd_resolve_service_instance(name):
         # treat missing TXT as single TXT with empty list of strings
         txts = [[]]
 
-    return [(srv, txt) for srv in srvs for txt in txts]
+    l = [(srv, txt) for srv in srvs for txt in txts]
+    for a in l:
+        logger.info('  {}'.format(a))
+
+    return l
 
 
 def check_uri(uri):
     """Check that URI hosts an ACME directory resource."""
 
-    logger.info('ACME-SD: check URI {0}'.format(uri))
+    logger.info('GET {0}'.format(uri))
 
     # We don't need a key to retrieve the directory object
     key = None
@@ -231,13 +258,13 @@ def check_uri(uri):
             acme.errors.ClientError, # non-2xx response, unexpected response type
     ) as e:
         # These are expected failure modes
-        logger.info('ACME-SD: failed to reach server: {0}'.format(e))
+        logger.warn('failed to reach server: {0}'.format(e))
         return False
 
     except Exception as e:
         # This was an unexpected error
-        logger.warn(
-            'ACME-SD: unexpected error while attempting to reach server: {0}'
+        logger.error(
+            'unexpected error while attempting to reach server: {0}'
             .format(e)
         )
         return False
@@ -248,8 +275,8 @@ def check_uri(uri):
         hasattr(client.directory, 'newNonce')
         or hasattr(client.directory, 'new-reg')
     ):
-        logger.info('ACME-SD: success')
+        logger.info('success')
         return True
     else:
-        logger.info('ACME-SD: response is not an ACME directory object')
+        logger.warn('response is not an ACME directory object')
         return False
