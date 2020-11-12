@@ -4,9 +4,11 @@ ACME Service Discovery for Certbot
 import argparse
 import logging
 import os
+import socket
 import tempfile
 
 import acme.client
+import dns.name
 import dns.rdatatype
 import dns.resolver
 import requests
@@ -77,6 +79,13 @@ def choose_parent_domains():
 
     # search domains from resolv.conf(5)
     parent_domains.extend(dns.resolver.Resolver().search)
+
+    # strip leftmost label from fqdn
+    fqdn = socket.getfqdn().split('.', 1)
+    if len(fqdn) == 2:
+        domain = dns.name.from_text(fqdn[1])
+        if domain not in parent_domains:
+            parent_domains.append(domain)
 
     # ensure subdomains are considered first
     parent_domains.sort(key=lambda n: len(n.labels), reverse=True)
